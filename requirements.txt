@@ -1,6 +1,5 @@
 streamlit
-numpy
-pillow
-scikit-learn
-joblib
-pandas
+langgraph
+langchain-groq
+pdfplumber
+python-dotenv
