@@ -95,27 +95,28 @@ def get_app():
 
     # Use MemorySaver to allow the human review pause
     memory = MemorySaver()
-    # We interrupt BEFORE prepare_interview so the user can see the resume first
+    # IMPORTANT: Use interrupt_before to stop and wait for user approval
     return builder.compile(checkpointer=memory, interrupt_before=["prepare_interview"])
-# Check if app is already in session, if not, create it
+
+# --- 6. STREAMLIT INITIALIZATION ---
+st.set_page_config(page_title="Job Trailer Agent", layout="wide")
+
+# Persistent App Instance
 if "app" not in st.session_state:
     st.session_state.app = get_app()
 
-# Use the app from session state instead of recreating it
-app = st.session_state.app
-thread = {"configurable": {"thread_id": "streamlit_user"}}
-# 6. Streamlit Interface
-# --- 6. STREAMLIT INTERFACE (Improved with Session State) ---
-st.set_page_config(page_title="Job Trailer Agent", layout="wide")
-st.title("💼 Job Trailer Agent: Resume Tailoring & Interview Prep")
-
-# Initialize Session State variables if they don't exist
+# Persistent Session Variables
 if "step" not in st.session_state:
     st.session_state.step = "input"
 if "tailored_resume" not in st.session_state:
     st.session_state.tailored_resume = None
 if "interview_materials" not in st.session_state:
     st.session_state.interview_materials = None
+
+# Thread Config (Fixed ID for the session)
+config = {"configurable": {"thread_id": "streamlit_user_session"}}
+
+st.title("💼 Job Trailer Agent: Resume Tailoring & Interview Preparation")
 
 # Sidebar Inputs
 with st.sidebar:
@@ -128,13 +129,9 @@ with st.sidebar:
     if st.button("Generate Tailored Resume", type="primary"):
         st.session_state.step = "processing"
 
-# Initialize graph and thread
-app = get_app()
-thread = {"configurable": {"thread_id": "streamlit_user"}}
-
 # STEP 1: Processing
 if st.session_state.step == "processing" and uploaded_file:
-    with st.spinner("AI is researching and tailoring..."):
+    with st.spinner("AI is researching the job and tailoring your resume..."):
         resume_text = read_resume_file(uploaded_file)
         initial_input = {
             "job_posting_url": job_url,
@@ -143,10 +140,11 @@ if st.session_state.step == "processing" and uploaded_file:
             "personal_writeup": personal_writeup
         }
         
-        # Use the session_state app
-        st.session_state.app.invoke(initial_input, thread)
+        # Invoke the graph - it will run until it hits the interrupt
+        st.session_state.app.invoke(initial_input, config)
         
-        snapshot = st.session_state.app.get_state(thread)
+        # Get the state to retrieve the resume
+        snapshot = st.session_state.app.get_state(config)
         st.session_state.tailored_resume = snapshot.values.get("tailored_resume")
         st.session_state.step = "review"
         st.rerun()
@@ -161,13 +159,16 @@ if st.session_state.step == "review":
     with col1:
         if st.button("✅ Approve & Get Interview Prep"):
             with st.spinner("Generating materials..."):
-                # Resume using the persistent app instance
-                # The thread_id tells the app which checkpoint to resume from
-                final_state_output = st.session_state.app.invoke(None, thread)
+                # Resume from the checkpoint by passing None as input
+                final_state_output = st.session_state.app.invoke(None, config)
                 
                 st.session_state.interview_materials = final_state_output.get("interview_materials")
                 st.session_state.step = "final"
                 st.rerun()
+    with col2:
+        if st.button("🔄 Start Over"):
+            st.session_state.step = "input"
+            st.rerun()
 
 # STEP 3: Final Output
 if st.session_state.step == "final":
@@ -175,16 +176,7 @@ if st.session_state.step == "final":
     tab1, tab2 = st.tabs(["Final Resume", "Interview Materials"])
     with tab1:
         st.markdown(st.session_state.tailored_resume)
-        st.download_button(
-            "Download Resume",
-            st.session_state.tailored_resume,
-            file_name="tailored_resume.md"
-        )
+        st.download_button("Download Resume", st.session_state.tailored_resume, file_name="tailored_resume.md")
     with tab2:
         st.markdown(st.session_state.interview_materials)
-        st.download_button(
-            "Download Interview Materials",
-            st.session_state.interview_materials,
-            file_name="interview_materials.md"
-        )
-        
+        st.download_button("Download Prep Materials", st.session_state.interview_materials, file_name="interview_prep.md")
