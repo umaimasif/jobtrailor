@@ -72,8 +72,9 @@ def prepare_interview(state: JobApplicationState):
     response = llm.invoke(prompt)
     return {"interview_materials": response.content}
 
-# 5. Graph Construction
-def get_app():
+# 5. Graph Construction (Cachced to prevent memory loss)
+@st.cache_resource
+def get_compiled_app():
     builder = StateGraph(JobApplicationState)
     builder.add_node("research_job", research_job)
     builder.add_node("build_profile", build_profile)
@@ -93,19 +94,16 @@ def get_app():
     )
     builder.add_edge("prepare_interview", END)
 
-    # Use MemorySaver to allow the human review pause
+    # The checkpointer stays inside the cached resource
     memory = MemorySaver()
-    # IMPORTANT: Use interrupt_before to stop and wait for user approval
     return builder.compile(checkpointer=memory, interrupt_before=["prepare_interview"])
 
 # --- 6. STREAMLIT INITIALIZATION ---
 st.set_page_config(page_title="Job Trailer Agent", layout="wide")
 
-# Persistent App Instance
-if "app" not in st.session_state:
-    st.session_state.app = get_app()
+# Get app from cache
+app = get_compiled_app()
 
-# Persistent Session Variables
 if "step" not in st.session_state:
     st.session_state.step = "input"
 if "tailored_resume" not in st.session_state:
@@ -113,12 +111,12 @@ if "tailored_resume" not in st.session_state:
 if "interview_materials" not in st.session_state:
     st.session_state.interview_materials = None
 
-# Thread Config (Fixed ID for the session)
-config = {"configurable": {"thread_id": "streamlit_user_session"}}
+# Thread Config
+config = {"configurable": {"thread_id": "global_user_session"}}
 
-st.title("💼 Job Trailer Agent: Resume Tailoring & Interview Preparation")
+st.title("💼 Job Trailer Agent")
 
-# Sidebar Inputs
+# Sidebar
 with st.sidebar:
     st.header("Inputs")
     job_url = st.text_input("Job URL")
@@ -131,7 +129,7 @@ with st.sidebar:
 
 # STEP 1: Processing
 if st.session_state.step == "processing" and uploaded_file:
-    with st.spinner("AI is researching the job and tailoring your resume..."):
+    with st.spinner("AI is researching and tailoring..."):
         resume_text = read_resume_file(uploaded_file)
         initial_input = {
             "job_posting_url": job_url,
@@ -140,11 +138,10 @@ if st.session_state.step == "processing" and uploaded_file:
             "personal_writeup": personal_writeup
         }
         
-        # Invoke the graph - it will run until it hits the interrupt
-        st.session_state.app.invoke(initial_input, config)
+        # Start new run
+        app.invoke(initial_input, config)
         
-        # Get the state to retrieve the resume
-        snapshot = st.session_state.app.get_state(config)
+        snapshot = app.get_state(config)
         st.session_state.tailored_resume = snapshot.values.get("tailored_resume")
         st.session_state.step = "review"
         st.rerun()
@@ -158,13 +155,18 @@ if st.session_state.step == "review":
     col1, col2 = st.columns(2)
     with col1:
         if st.button("✅ Approve & Get Interview Prep"):
-            with st.spinner("Generating materials..."):
-                # Resume from the checkpoint by passing None as input
-                final_state_output = st.session_state.app.invoke(None, config)
-                
-                st.session_state.interview_materials = final_state_output.get("interview_materials")
-                st.session_state.step = "final"
-                st.rerun()
+            # VERIFY STATE BEFORE INVOKE
+            snapshot = app.get_state(config)
+            if snapshot.next: # Only invoke if we are actually paused
+                with st.spinner("Generating materials..."):
+                    final_state_output = app.invoke(None, config)
+                    st.session_state.interview_materials = final_state_output.get("interview_materials")
+                    st.session_state.step = "final"
+                    st.rerun()
+            else:
+                st.error("No paused state found. Please try generating again.")
+                st.session_state.step = "input"
+
     with col2:
         if st.button("🔄 Start Over"):
             st.session_state.step = "input"
