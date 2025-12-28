@@ -97,7 +97,13 @@ def get_app():
     memory = MemorySaver()
     # We interrupt BEFORE prepare_interview so the user can see the resume first
     return builder.compile(checkpointer=memory, interrupt_before=["prepare_interview"])
+# Check if app is already in session, if not, create it
+if "app" not in st.session_state:
+    st.session_state.app = get_app()
 
+# Use the app from session state instead of recreating it
+app = st.session_state.app
+thread = {"configurable": {"thread_id": "streamlit_user"}}
 # 6. Streamlit Interface
 # --- 6. STREAMLIT INTERFACE (Improved with Session State) ---
 st.set_page_config(page_title="Job Trailer Agent", layout="wide")
@@ -136,11 +142,11 @@ if st.session_state.step == "processing" and uploaded_file:
             "resume_text": resume_text,
             "personal_writeup": personal_writeup
         }
-        # Run until the interrupt_before "prepare_interview"
-        app.invoke(initial_input, thread)
         
-        # Capture the result from the state
-        snapshot = app.get_state(thread)
+        # Use the session_state app
+        st.session_state.app.invoke(initial_input, thread)
+        
+        snapshot = st.session_state.app.get_state(thread)
         st.session_state.tailored_resume = snapshot.values.get("tailored_resume")
         st.session_state.step = "review"
         st.rerun()
@@ -155,15 +161,13 @@ if st.session_state.step == "review":
     with col1:
         if st.button("✅ Approve & Get Interview Prep"):
             with st.spinner("Generating materials..."):
-                # Resume the graph from the checkpoint
-                final_state = app.invoke(None, thread)
-                st.session_state.interview_materials = final_state.get("interview_materials")
+                # Resume using the persistent app instance
+                # The thread_id tells the app which checkpoint to resume from
+                final_state_output = st.session_state.app.invoke(None, thread)
+                
+                st.session_state.interview_materials = final_state_output.get("interview_materials")
                 st.session_state.step = "final"
                 st.rerun()
-    with col2:
-        if st.button("🔄 Restart"):
-            st.session_state.step = "input"
-            st.rerun()
 
 # STEP 3: Final Output
 if st.session_state.step == "final":
