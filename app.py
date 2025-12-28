@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import json
 import pdfplumber
+import uuid
 from typing import TypedDict, Optional
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
@@ -72,7 +73,7 @@ def prepare_interview(state: JobApplicationState):
     response = llm.invoke(prompt)
     return {"interview_materials": response.content}
 
-# 5. Graph Construction (Cachced to prevent memory loss)
+# 5. ENHANCED GRAPH CONSTRUCTION (Cached)
 @st.cache_resource
 def get_compiled_app():
     builder = StateGraph(JobApplicationState)
@@ -89,58 +90,58 @@ def get_compiled_app():
     
     builder.add_conditional_edges(
         "validate_resume",
-        lambda x: "approved" if x["approved"] or x["retries"] > 2 else "retry",
+        lambda x: "approved" if x.get("approved") or x.get("retries", 0) > 2 else "retry",
         {"approved": "prepare_interview", "retry": "tailor_resume"}
     )
     builder.add_edge("prepare_interview", END)
 
-    # The checkpointer stays inside the cached resource
     memory = MemorySaver()
     return builder.compile(checkpointer=memory, interrupt_before=["prepare_interview"])
 
-# --- 6. STREAMLIT INITIALIZATION ---
+# 6. STREAMLIT UI INITIALIZATION
 st.set_page_config(page_title="Job Trailer Agent", layout="wide")
 
-# Get app from cache
-app = get_compiled_app()
+if "thread_id" not in st.session_state:
+    st.session_state.thread_id = str(uuid.uuid4())
 
 if "step" not in st.session_state:
     st.session_state.step = "input"
-if "tailored_resume" not in st.session_state:
-    st.session_state.tailored_resume = None
-if "interview_materials" not in st.session_state:
-    st.session_state.interview_materials = None
 
-# Thread Config
-config = {"configurable": {"thread_id": "global_user_session"}}
+app = get_compiled_app()
+config = {"configurable": {"thread_id": st.session_state.thread_id}}
 
 st.title("💼 Job Trailer Agent")
 
-# Sidebar
+# Sidebar Inputs
 with st.sidebar:
-    st.header("Inputs")
+    st.header("Upload & Details")
     job_url = st.text_input("Job URL")
     github_url = st.text_input("GitHub URL")
     uploaded_file = st.file_uploader("Upload Original Resume", type="pdf")
     personal_writeup = st.text_area("Personal Summary")
     
     if st.button("Generate Tailored Resume", type="primary"):
-        st.session_state.step = "processing"
+        if job_url and uploaded_file:
+            st.session_state.step = "processing"
+        else:
+            st.error("Please provide a Job URL and Resume PDF.")
 
 # STEP 1: Processing
-if st.session_state.step == "processing" and uploaded_file:
+if st.session_state.step == "processing":
     with st.spinner("AI is researching and tailoring..."):
         resume_text = read_resume_file(uploaded_file)
         initial_input = {
             "job_posting_url": job_url,
             "github_url": github_url,
             "resume_text": resume_text,
-            "personal_writeup": personal_writeup
+            "personal_writeup": personal_writeup,
+            "retries": 0
         }
         
-        # Start new run
+        # Start the graph run
         app.invoke(initial_input, config)
         
+        # Get the tailored resume result
         snapshot = app.get_state(config)
         st.session_state.tailored_resume = snapshot.values.get("tailored_resume")
         st.session_state.step = "review"
@@ -155,20 +156,18 @@ if st.session_state.step == "review":
     col1, col2 = st.columns(2)
     with col1:
         if st.button("✅ Approve & Get Interview Prep"):
-            # VERIFY STATE BEFORE INVOKE
-            snapshot = app.get_state(config)
-            if snapshot.next: # Only invoke if we are actually paused
+            state_info = app.get_state(config)
+            if state_info.next:
                 with st.spinner("Generating materials..."):
-                    final_state_output = app.invoke(None, config)
-                    st.session_state.interview_materials = final_state_output.get("interview_materials")
+                    final_output = app.invoke(None, config)
+                    st.session_state.interview_materials = final_output.get("interview_materials")
                     st.session_state.step = "final"
                     st.rerun()
             else:
-                st.error("No paused state found. Please try generating again.")
+                st.error("Session lost. Please restart.")
                 st.session_state.step = "input"
-
     with col2:
-        if st.button("🔄 Start Over"):
+        if st.button("🔄 Restart"):
             st.session_state.step = "input"
             st.rerun()
 
