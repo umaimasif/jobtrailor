@@ -110,7 +110,7 @@ if "step" not in st.session_state:
 app = get_compiled_app()
 config = {"configurable": {"thread_id": st.session_state.thread_id}}
 
-st.title("💼 Job Trailer Agent")
+st.title("Job Trailer Agent & Interview Preparer")
 
 # Sidebar Inputs
 with st.sidebar:
@@ -180,4 +180,5 @@ if st.session_state.step == "final":
         st.download_button("Download Resume", st.session_state.tailored_resume, file_name="tailored_resume.md")
     with tab2:
         st.markdown(st.session_state.interview_materials)
+
         st.download_button("Download Prep Materials", st.session_state.interview_materials, file_name="interview_prep.md")
